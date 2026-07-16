@@ -44,11 +44,24 @@ class CameraPreprocessor:
 
         return frame, final_frame
 
+    def get_red_mask(self, hsv_frame):
+        """Создает маску красного цвета из HSV изображения"""
+        lower_red1 = np.array([0, 120, 100])
+        upper_red1 = np.array([5, 255, 255])
+        lower_red2 = np.array([175, 120, 100])
+        upper_red2 = np.array([180, 255, 255])
+        
+        mask1 = cv2.inRange(hsv_frame, lower_red1, upper_red1)
+        mask2 = cv2.inRange(hsv_frame, lower_red2, upper_red2)
+        red_mask = cv2.bitwise_or(mask1, mask2)
+        
+        return red_mask
+
     def release(self):
         self.cap.release()
 
 
-cap = CameraPreprocessor("http://10.136.128.14:5000/video_feed")
+cap = CameraPreprocessor("http://192.168.2.2:5000/video_feed")
 if __name__ == "__main__":
     while True:
         original_frame, frame = cap.get_processed_hsv()

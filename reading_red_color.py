@@ -1,112 +1,121 @@
 import cv2
 import numpy as np
-import time
 
-# ============ НАСТРОЙКИ ============
-stream_url = "http://10.136.128.14:5000/video_feed"
-ER_INFO = [False, 0, 0]
-
-ROI_HEIGHT_RATIO = 1    #параметр отвечающий за часть экрана которую анализируем
-
-# диапазоны красного меняем если черный цвет нужен
-LOWER_RED1 = np.array([0, 100, 60])
+LOWER_RED1 = np.array([0, 120, 100])
 UPPER_RED1 = np.array([5, 255, 255])
-LOWER_RED2 = np.array([155, 50, 60])
+LOWER_RED2 = np.array([175, 120, 100])
 UPPER_RED2 = np.array([180, 255, 255])
 
-MIN_CONTOUR_AREA = 20
+DEFAULT_STRIPES = 6
+DEFAULT_MIN_CONTOUR_AREA = 80
 
-def get_line_position(frame, center_x):
-    height, width = frame.shape[:2]
 
+def build_red_mask(frame, kernel_size=(5, 5)):
+    """Построить бинарную маску красного цвета с морфологической очисткой."""
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-
     mask1 = cv2.inRange(hsv, LOWER_RED1, UPPER_RED1)
     mask2 = cv2.inRange(hsv, LOWER_RED2, UPPER_RED2)
     mask = cv2.bitwise_or(mask1, mask2)
 
-    kernel = np.ones((3, 3), np.uint8)
+    kernel = np.ones(kernel_size, np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-
-    # вырезаем нижнюю часть кадра
-    roi_y_start = int(height * (1 - ROI_HEIGHT_RATIO))
-    roi = mask[roi_y_start:height, :]
-
-    contours, _ = cv2.findContours(roi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    if not contours:
-        return False, 0, 0, mask, roi_y_start
-
-    c = max(contours, key=cv2.contourArea)
-
-    if cv2.contourArea(c) < MIN_CONTOUR_AREA:
-        return False, 0, 0, mask, roi_y_start
-
-    M = cv2.moments(c)
-    if M["m00"] == 0:
-        return False, 0, 0, mask, roi_y_start
-
-    cx = int(M["m10"] / M["m00"])
-    error = center_x - cx
-
-    return True, cx, error, mask, roi_y_start
+    return mask
 
 
-def main():
-    cap = cv2.VideoCapture(stream_url)
-    # Убираем принудительную установку разрешения, берем реальное из кадра!
+def get_stripe_trajectory(frame, stripes=DEFAULT_STRIPES, min_area=DEFAULT_MIN_CONTOUR_AREA):
+    """Разбивает кадр на горизонтальные полосы и возвращает траекторию по красным точкам.
 
-    if not cap.isOpened():
-        print("Камера не открылась")
-        return
+    Каждая точка содержит [x, y, distance, error].
+    distance — пиксельное расстояние от нижнего края кадра.
+    error — отклонение от центральной вертикали.
+    """
+    height, width = frame.shape[:2]
+    center_x = width // 2
+    mask = build_red_mask(frame)
 
+    stripe_height = max(1, height // stripes)
+    trajectory = []
+
+    for stripe_index in range(stripes):
+        y2 = height - stripe_index * stripe_height
+        y1 = max(0, y2 - stripe_height)
+        stripe_mask = mask[y1:y2, :]
+
+        contours, _ = cv2.findContours(stripe_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            continue
+
+        best = max(contours, key=cv2.contourArea)
+        if cv2.contourArea(best) < min_area:
+            continue
+
+        M = cv2.moments(best)
+        if M["m00"] == 0:
+            continue
+
+        cx = int(M["m10"] / M["m00"])
+        cy = int(M["m01"] / M["m00"]) + y1
+        error = center_x - cx
+        distance = float(height - cy)
+
+        trajectory.append([cx, cy, distance, error])
+
+    return trajectory
+
+
+def get_line_position(frame, center_x, stripes=DEFAULT_STRIPES, min_area=DEFAULT_MIN_CONTOUR_AREA):
+    """Найти первую (ближайшую) красную точку по полоскам и вернуть позицию для управления."""
+    mask = build_red_mask(frame)
+    height = frame.shape[0]
+    stripe_height = max(1, height // stripes)
+
+    for stripe_index in range(stripes):
+        y2 = height - stripe_index * stripe_height
+        y1 = max(0, y2 - stripe_height)
+        stripe_mask = mask[y1:y2, :]
+
+        contours, _ = cv2.findContours(stripe_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            continue
+
+        best = max(contours, key=cv2.contourArea)
+        if cv2.contourArea(best) < min_area:
+            continue
+
+        M = cv2.moments(best)
+        if M["m00"] == 0:
+            continue
+
+        cx = int(M["m10"] / M["m00"])
+        error = center_x - cx
+        return True, cx, error, mask, y1
+
+    return False, 0, 0, mask, height - stripe_height
+
+
+if __name__ == "__main__":
+    from filter import CameraPreprocessor
+
+    stream_url = "http://192.168.2.2:5000/video_feed"
+    cap = CameraPreprocessor(stream_url)
+
+    print("Демонстрация траектории по полоскам. Нажми 'q' для выхода.")
     while True:
-        ret, frame = cap.read()
-        if not ret:
-            print("Ошибка чтения кадра!")
+        original_frame, frame = cap.get_processed_hsv()
+        if frame is None:
             break
 
-        # УЗНАЕМ РЕАЛЬНЫЙ РАЗМЕР КАДРА
-        height, width = frame.shape[:2]
-        center_x = width // 2
+        trajectory = get_stripe_trajectory(frame, stripes=6, min_area=80)
+        debug = frame.copy()
+        for x, y, distance, error in trajectory:
+            cv2.circle(debug, (x, y), 5, (0, 255, 0), -1)
+            cv2.putText(debug, f"d={int(distance)} e={int(error)}", (x + 5, y - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
 
-        # получаем координаты + дополнительные данные для отладки
-        found, cx, error, mask, roi_y_start = get_line_position(frame, center_x)
-
-        ER_INFO[0] = found
-        ER_INFO[1] = cx
-        ER_INFO[2] = error
-
-        # === БЛОК ОТЛАДКИ ===   (закоментировать если все ок)
-        #зона поиска на оригинальном кадре
-        debug_frame = frame.copy()
-        cv2.rectangle(debug_frame, (0, roi_y_start), (width, height), (255, 255, 0), 2)
-        cv2.line(debug_frame, (center_x, 0), (center_x, height), (255, 0, 0), 1) # синяя линия центра
-
-        if found:
-            # рисуем точку центра найденной линии
-            cv2.circle(debug_frame, (cx, roi_y_start + 20), 10, (0, 255, 0), -1)
-            cv2.putText(debug_frame, f"Error: {error}", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        else:
-            cv2.putText(debug_frame, "Line NOT found", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-
-        # 2. отображение маски
-        cv2.imshow('Mask (Red)', mask)
-
-        # 3. кадр с графикой
-        cv2.imshow('Debug View', debug_frame)
-        # ==================================
-
-        print(ER_INFO[2])
-
+        cv2.imshow("Stripe Trajectory", debug)
         if cv2.waitKey(10) & 0xFF == ord('q'):
             break
 
     cap.release()
     cv2.destroyAllWindows()
-
-if __name__ == "__main__":
-    main()
