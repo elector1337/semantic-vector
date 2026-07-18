@@ -2,17 +2,23 @@ import numpy as np
 from scipy.interpolate import splprep, splev
 
 class Spline:
-    def __init__(self):  # <-- ИСПРАВЛЕНО: было def init(self):
+    def __init__(self, smoothing: float = 0.0):
         self.tck = None
         self.u_range = None
         # Добавляем таблицы для мгновенного поиска по расстоянию (оптимизация FPS)
         self.u_fine = np.array([])
         self.arc_lengths = np.array([])
         self.total_length = 0.0
+        self.smoothing = smoothing
 
     def splineFromPoints(self, X: np.ndarray, y: np.ndarray) -> None:
         """Строит сплайн через заданные точки и предрассчитывает длины дуг."""
-        self.tck, self.u_range = splprep([X, y], s=0)
+        if len(X) != len(y) or len(X) < 2:
+            raise ValueError("Для сплайна нужны минимум две точки с координатами X и y.")
+
+        # Кубический сплайн требует четыре точки; для короткого участка понижаем степень.
+        degree = min(3, len(X) - 1)
+        self.tck, self.u_range = splprep([X, y], s=self.smoothing, k=degree)
         self._precompute_arc_lengths()
 
     def _precompute_arc_lengths(self, resolution: int = 500) -> None:

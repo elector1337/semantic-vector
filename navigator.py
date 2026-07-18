@@ -7,9 +7,12 @@ from scipy.integrate import IntegrationWarning
 
 warnings.filterwarnings('ignore', category=IntegrationWarning)
 
-from pid_controller import PIDController
+from pid import PIDController
 from spline import Spline
 from algo import get_wheel_speeds
+from constants import MIN_LOCAL_PATH_POINTS
+import logging
+logger = logging.getLogger(__name__)
 
 def evaluate_spline(tck, u):
     res = splev(u, tck)
@@ -145,3 +148,45 @@ class VectorNavigator:
 
     def is_finished(self):
         return self.finished
+
+
+class LocalSplineNavigator:
+    """Строит локальный сплайн по линии текущего кадра и выбирает look-ahead точку."""
+
+    def __init__(self, lookahead_distance, smoothing):
+        self.lookahead_distance = lookahead_distance
+        self.smoothing = smoothing
+
+    def get_angle_error(self, centerline, robot_point):
+        """Возвращает ошибку угла [-1; 1] и look-ahead точку либо (None, None)."""
+        if len(centerline) < MIN_LOCAL_PATH_POINTS:
+            return None, None
+
+        robot = np.asarray(robot_point, dtype=float)
+        points = np.asarray(centerline, dtype=float)
+        # Робот — начало локальной траектории. Удаляем совпадающие с ним точки,
+        # иначе splprep получает повторяющиеся параметры.
+        points = points[np.linalg.norm(points - robot, axis=1) > 1.0]
+        if len(points) < MIN_LOCAL_PATH_POINTS:
+            return None, None
+
+        trajectory = np.vstack((robot, points))
+        spline = Spline(smoothing=self.smoothing)
+        try:
+            spline.splineFromPoints(trajectory[:, 0], trajectory[:, 1])
+        except (TypeError, ValueError):
+            return None, None
+
+        target_x, target_y, _ = get_point_ahead_optimized(
+            spline, u=0.0, distance=self.lookahead_distance
+        )
+
+        # В изображении ось Y направлена вниз. Направление робота — вверх кадра.
+        lateral = target_x - robot[0]
+        forward = robot[1] - target_y
+        if forward <= 0:
+            return None, None
+
+        angle_error = math.atan2(lateral, forward)
+        normalized_angle = float(np.clip(angle_error / (math.pi / 2), -1.0, 1.0))
+        return normalized_angle, (int(round(target_x)), int(round(target_y)))
