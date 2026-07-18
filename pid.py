@@ -1,7 +1,8 @@
 import numpy as np
+from constants import PID_KP, PID_KI, PID_KD, PID_DT, PID_MAX_SPEED
 
 class PIDController:
-    def __init__(self, Kp=5, Ki=0.01, Kd=0.2, dt=0.1, max_speed=15.0):
+    def __init__(self, Kp=PID_KP, Ki=PID_KI, Kd=PID_KD, dt=PID_DT, max_speed=PID_MAX_SPEED):
         self.Kp = Kp
         self.Ki = Ki
         self.Kd = Kd

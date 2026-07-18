@@ -1,43 +1,59 @@
 import cv2
 import numpy as np
 import time
-import requests
 import threading
-import torch
+import serial  # Встроенная работа с портом
 
-from filter import CameraPreprocessor
-from reading_red_color import get_line_position
+from filter import CameraPreprocessor, get_line_position
 from algo import get_wheel_speeds
 from pid import PIDController
+from constants import (
+    COMMAND_SEND_INTERVAL,
+    DIST,
+    MTX,
+    MAX_MOTOR_SPEED,
+    ROBOT_URL, # Оставил, на случай если камера все еще стримится по сети
+    ROBOT_CONTROL_KD,
+    ROBOT_CONTROL_KI,
+    ROBOT_CONTROL_KP,
+    USE_RL_AGENT,
+)
 
 # ============ НАСТРОЙКИ СЕТИ И РОБОТА ============
-ROBOT_URL = "http://10.136.128.14:5000"
-MAX_MOTOR_SPEED = 200
-USE_RL_AGENT = False  # Переключатель: False = работает PID, True = работает Нейросеть
+USE_RL_AGENT = USE_RL_AGENT  # Переключатель: False = работает PID, True = работает Нейросеть
+COMMAND_SEND_INTERVAL = COMMAND_SEND_INTERVAL
 
-# Ограничение частоты отправки команд на сервер (0.1 сек = 10 FPS)
-COMMAND_SEND_INTERVAL = 0.1
+# === НАСТРОЙКИ SERIAL ПОРТА ===
+SERIAL_PORT = '/dev/ttyUSB0'
+BAUD_RATE = 115200
 
 # === МАТРИЦЫ КАЛИБРОВКИ ===
-MTX = None
-DIST = None
+MTX = MTX
+DIST = DIST
 
 # === ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ДЛЯ ПОТОКА УПРАВЛЕНИЯ ===
 speed_lock = threading.Lock()
 shared_speed_l = 0
 shared_speed_r = 0
-network_thread_running = True
+serial_thread_running = True
+ser = None
+
+# Пытаемся открыть Serial-порт при старте
+try:
+    ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
+    print(f"[SERIAL] Подключено к порту {SERIAL_PORT} на скорости {BAUD_RATE}")
+except serial.SerialException as e:
+    print(f"[SERIAL ОШИБКА] Не удалось открыть порт {SERIAL_PORT}: {e}")
 
 
-def network_worker():
-    """Выделенный поток, который отправляет команды на робота со строгим интервалом"""
-    global shared_speed_l, shared_speed_r, network_thread_running
+def serial_worker():
+    """Выделенный поток, который отправляет команды напрямую в Serial со строгим интервалом"""
+    global shared_speed_l, shared_speed_r, serial_thread_running, ser
 
-    # Храним состояние скоростей локально внутри потока, чтобы знать, что изменилось
     last_sent_l = 0
     last_sent_r = 0
 
-    while network_thread_running:
+    while serial_thread_running:
         start_time = time.time()
 
         # Безопасно забираем текущие целевые скорости
@@ -45,18 +61,19 @@ def network_worker():
             current_target_l = shared_speed_l
             current_target_r = shared_speed_r
 
-        # Отправляем только если скорости изменились ИЛИ для поддержания связи (watchdog)
-        # Если нужно отправлять ВСЕГДА (каждые 100мс), можно убрать условие с "if"
+        # Отправляем только если скорости изменились
         if current_target_l != last_sent_l or current_target_r != last_sent_r:
-            req_url = f"{ROBOT_URL}/move?left={current_target_l}&right={current_target_r}"
-            try:
-                requests.get(req_url, timeout=0.15)
-                last_sent_l = current_target_l
-                last_sent_r = current_target_r
-            except requests.exceptions.RequestException:
-                pass  # Сервер временно недоступен — игнорируем ошибку
+            if ser and ser.is_open:
+                # Формируем строку вида "50,-50\n"
+                command = f"{current_target_l},{current_target_r}\n"
+                try:
+                    ser.write(command.encode('utf-8'))
+                    last_sent_l = current_target_l
+                    last_sent_r = current_target_r
+                except Exception as e:
+                    print(f"[SERIAL ОШИБКА] Сбой записи: {e}")
 
-        # Рассчитываем точное время сна, учитывая время выполнения самого запроса
+        # Рассчитываем точное время сна
         elapsed = time.time() - start_time
         sleep_time = max(0.001, COMMAND_SEND_INTERVAL - elapsed)
         time.sleep(sleep_time)
@@ -64,25 +81,26 @@ def network_worker():
 
 # ============ ГЛАВНАЯ ФУНКЦИЯ ============
 def main():
-    global shared_speed_l, shared_speed_r, network_thread_running
+    global shared_speed_l, shared_speed_r, serial_thread_running, ser
 
-    stream_url = f"{ROBOT_URL}/video_feed"
+    # Если камера подключена локально (USB), замените stream_url на 0 или 1
+    stream_url = f"{ROBOT_URL}/video_feed" 
     print("Подключение к камере...")
 
     filt = CameraPreprocessor(stream_url)
 
     # === ИНИЦИАЛИЗАЦИЯ УПРАВЛЕНИЯ ===
     print("Инициализация ПИД-регулятора...")
-    pid_controller = PIDController(Kp=1.0, Ki=0.02, Kd=0.5)
+    pid_controller = PIDController(Kp=ROBOT_CONTROL_KP, Ki=ROBOT_CONTROL_KI, Kd=ROBOT_CONTROL_KD)
     pid_controller.reset()
 
     newcameramtx = None
 
-    # Запуск выделенного сетевого потока
-    net_thread = threading.Thread(target=network_worker, daemon=True)
-    net_thread.start()
+    # Запуск выделенного потока отправки данных в порт
+    s_thread = threading.Thread(target=serial_worker, daemon=True)
+    s_thread.start()
 
-    print(f"Подключение установлено. Режим: {'AI' if USE_RL_AGENT else 'PID'}. (Нажми 'q' для выхода)")
+    print(f"Подключение установлено. Режим: {'AI' if USE_RL_AGENT else 'PID'}. (Нажми 'Ctrl+C' для выхода)")
 
     try:
         while True:
@@ -91,7 +109,7 @@ def main():
                 print("Ошибка чтения кадра!")
                 continue
 
-            # 1. Выпрямление кадра (если заданы матрицы)
+            # 1. Выпрямление кадра
             if MTX is not None and DIST is not None:
                 h, w = frame.shape[:2]
                 if newcameramtx is None:
@@ -156,40 +174,50 @@ def main():
                 target_speed_l = int(ls * MAX_MOTOR_SPEED)
                 target_speed_r = int(rs * MAX_MOTOR_SPEED)
 
-            # ВМЕСТО ОТПРАВКИ: Безопасно обновляем скорости для сетевого потока
+            # Безопасно обновляем скорости для Serial-потока
             with speed_lock:
                 shared_speed_l = target_speed_l
                 shared_speed_r = target_speed_r
 
-            # 5. ОТРИСОВКА И ДЕБАГ
-            debug_frame = frame.copy()
-            cv2.rectangle(debug_frame, (0, roi_y_start), (width, height), (255, 255, 0), 2)
-            cv2.line(debug_frame, (center_x, 0), (center_x, height), (255, 0, 0), 1)
+            # 5. ОТРИСОВКА И ДЕБАГ (Отключено для запуска без монитора)
+            # debug_frame = frame.copy()
+            # cv2.rectangle(debug_frame, (0, roi_y_start), (width, height), (255, 255, 0), 2)
+            # cv2.line(debug_frame, (center_x, 0), (center_x, height), (255, 0, 0), 1)
 
-            if found:
-                cv2.circle(debug_frame, (cx, roi_y_start + 20), 10, (0, 255, 0), -1)
-                cv2.putText(debug_frame, f"Error: {error}", (10, 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            else:
-                cv2.putText(debug_frame, "Line NOT found", (10, 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            # if found:
+            #     cv2.circle(debug_frame, (cx, roi_y_start + 20), 10, (0, 255, 0), -1)
+            #     cv2.putText(debug_frame, f"Error: {error}", (10, 30),
+            #                 cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            # else:
+            #     cv2.putText(debug_frame, "Line NOT found", (10, 30),
+            #                 cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
-            cv2.imshow('Mask (Red)', mask)
-            cv2.imshow('Debug View', debug_frame)
+            # cv2.imshow('Mask (Red)', mask)
+            # cv2.imshow('Debug View', debug_frame)
 
-            if cv2.waitKey(10) & 0xFF == ord('q'):
-                break
+            # if cv2.waitKey(10) & 0xFF == ord('q'):
+            #     break
+            
+            # Задержка вместо waitKey, чтобы не перегружать процессор
+            time.sleep(0.01)
+
+    except KeyboardInterrupt:
+        # Обработка остановки программы по Ctrl+C
+        print("\nПрограмма остановлена пользователем.")
 
     finally:
         print("Остановка робота и закрытие ресурсов...")
-        # Сигнализируем сетевому потоку о завершении работы
-        network_thread_running = False
+        # Сигнализируем Serial-потоку о завершении
+        serial_thread_running = False
 
-        # Финальный стоп отправляем синхронно (без спавна потока, так как всё закрывается)
-        try:
-            requests.get(f"{ROBOT_URL}/stop", timeout=0.5)
-        except requests.exceptions.RequestException:
-            pass
+        # Экстренный стоп: пишем нули напрямую в порт
+        if ser and ser.is_open:
+            try:
+                ser.write(b"0,0\n")
+                ser.close()
+                print("[SERIAL] Порт закрыт.")
+            except Exception as e:
+                print(f"Ошибка при закрытии порта: {e}")
 
         filt.release()
         cv2.destroyAllWindows()
