@@ -1,7 +1,32 @@
+import copy
 import logging
 import sys
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
+
+
+class ColoredFormatter(logging.Formatter):
+    COLORS = {
+        "DEBUG": "\033[36m",    # cyan
+        "INFO": "\033[32m",     # green
+        "WARNING": "\033[33m",  # yellow
+        "ERROR": "\033[31m",    # red
+        "CRITICAL": "\033[35m", # magenta
+    }
+    RESET = "\033[0m"
+
+    def __init__(self, fmt: str, datefmt: str | None = None, use_colors: bool = True):
+        super().__init__(fmt=fmt, datefmt=datefmt)
+        self.use_colors = use_colors
+
+    def format(self, record: logging.LogRecord) -> str:
+        if self.use_colors:
+            color = self.COLORS.get(record.levelname)
+            if color:
+                record_copy = copy.copy(record)
+                record_copy.levelname = f"{color}{record.levelname}{self.RESET}"
+                return super().format(record_copy)
+        return super().format(record)
 
 
 def setup_logger(name: str = "robot", level: int = logging.INFO) -> logging.Logger:
@@ -15,9 +40,10 @@ def setup_logger(name: str = "robot", level: int = logging.INFO) -> logging.Logg
     if logger.handlers:
         return logger
 
-    formatter = logging.Formatter(
+    formatter = ColoredFormatter(
         '%(asctime)s | %(levelname)-8s | %(name)s | %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+        datefmt='%Y-%m-%d %H:%M:%S',
+        use_colors=True,
     )
 
     console_handler = logging.StreamHandler(sys.stdout)
