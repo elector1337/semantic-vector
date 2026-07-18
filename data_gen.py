@@ -2,11 +2,8 @@ from aruco_detector import ArucoDetector
 from cleaner import TrajectoryCleaner
 from history import HistoryManager
 from generator import DatasetGenerator, PointsStorage
+from logging import log
 import cv2
-import logging
-
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
-logger = logging.getLogger(__name__)
 
 IP = "10.248.142.14:5010"
 
@@ -26,12 +23,12 @@ def save_dataset():
     
 
 def main():
-    logger.info("start servise")
+    log.info("start servise")
     while True:
         detections = detector.get_detections()
         if cv2.waitKey(1) & 0xFF == ord('q'):
             detector.stop()
-            logger.info("servese stopped")
+            log.info("servese stopped")
             save_dataset()
             break
         if detections:

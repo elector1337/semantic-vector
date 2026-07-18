@@ -6,9 +6,10 @@ import threading
 import torch
 
 from filter import CameraPreprocessor
-from reading_red_color import get_line_position
+from filter import get_line_position
 from algo import get_wheel_speeds
 from pid import PIDController
+from logging import log
 
 # ============ НАСТРОЙКИ СЕТИ И РОБОТА ============
 ROBOT_URL = "http://10.136.128.14:5000"
@@ -67,12 +68,10 @@ def main():
     global shared_speed_l, shared_speed_r, network_thread_running
 
     stream_url = f"{ROBOT_URL}/video_feed"
-    print("Подключение к камере...")
 
     filt = CameraPreprocessor(stream_url)
 
     # === ИНИЦИАЛИЗАЦИЯ УПРАВЛЕНИЯ ===
-    print("Инициализация ПИД-регулятора...")
     pid_controller = PIDController(Kp=1.0, Ki=0.02, Kd=0.5)
     pid_controller.reset()
 
@@ -82,13 +81,13 @@ def main():
     net_thread = threading.Thread(target=network_worker, daemon=True)
     net_thread.start()
 
-    print(f"Подключение установлено. Режим: {'AI' if USE_RL_AGENT else 'PID'}. (Нажми 'q' для выхода)")
+    log.info(f"Подключение установлено. Режим: {'AI' if USE_RL_AGENT else 'PID'}. (Нажми 'q' для выхода)")
 
     try:
         while True:
             _, frame = filt.get_processed_hsv()
             if frame is None:
-                print("Ошибка чтения кадра!")
+                log.error("Ошибка чтения кадра!")
                 continue
 
             # 1. Выпрямление кадра (если заданы матрицы)
@@ -181,8 +180,8 @@ def main():
                 break
 
     finally:
-        print("Остановка робота и закрытие ресурсов...")
         # Сигнализируем сетевому потоку о завершении работы
+        log.info("Завершение работы.")
         network_thread_running = False
 
         # Финальный стоп отправляем синхронно (без спавна потока, так как всё закрывается)

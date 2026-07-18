@@ -2,6 +2,8 @@ import cv2
 import numpy as np
 import time
 
+from logger import log
+
 # ============ НАСТРОЙКИ ============
 stream_url = "http://10.136.128.14:5000/video_feed"
 ER_INFO = [False, 0, 0]
@@ -58,13 +60,13 @@ def main():
     # Убираем принудительную установку разрешения, берем реальное из кадра!
 
     if not cap.isOpened():
-        print("Камера не открылась")
+        log.error("Камера не открылась")
         return
 
     while True:
         ret, frame = cap.read()
         if not ret:
-            print("Ошибка чтения кадра!")
+            log.error("Не удалось получить кадр с камеры")
             break
 
         # УЗНАЕМ РЕАЛЬНЫЙ РАЗМЕР КАДРА
@@ -74,36 +76,34 @@ def main():
         # получаем координаты + дополнительные данные для отладки
         found, cx, error, mask, roi_y_start = get_line_position(frame, center_x)
 
-        ER_INFO[0] = found
-        ER_INFO[1] = cx
-        ER_INFO[2] = error
+        log.info(f"Line found: {found}, Center X: {cx}, Error: {error}")
 
         # === БЛОК ОТЛАДКИ ===   (закоментировать если все ок)
         #зона поиска на оригинальном кадре
-        debug_frame = frame.copy()
-        cv2.rectangle(debug_frame, (0, roi_y_start), (width, height), (255, 255, 0), 2)
-        cv2.line(debug_frame, (center_x, 0), (center_x, height), (255, 0, 0), 1) # синяя линия центра
+        #debug_frame = frame.copy()
+        #cv2.rectangle(debug_frame, (0, roi_y_start), (width, height), (255, 255, 0), 2)
+        #cv2.line(debug_frame, (center_x, 0), (center_x, height), (255, 0, 0), 1) # синяя линия центра
 
-        if found:
+        #if found:
             # рисуем точку центра найденной линии
-            cv2.circle(debug_frame, (cx, roi_y_start + 20), 10, (0, 255, 0), -1)
-            cv2.putText(debug_frame, f"Error: {error}", (10, 30),
+            #cv2.circle(debug_frame, (cx, roi_y_start + 20), 10, (0, 255, 0), -1)
+            #cv2.putText(debug_frame, f"Error: {error}", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        else:
-            cv2.putText(debug_frame, "Line NOT found", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        #else:
+            #cv2.putText(debug_frame, "Line NOT found", (10, 30),
+                        #cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
         # 2. отображение маски
-        cv2.imshow('Mask (Red)', mask)
+        #cv2.imshow('Mask (Red)', mask)
 
         # 3. кадр с графикой
-        cv2.imshow('Debug View', debug_frame)
+        #cv2.imshow('Debug View', debug_frame)
         # ==================================
 
-        print(ER_INFO[2])
+        #print(ER_INFO[2])
 
-        if cv2.waitKey(10) & 0xFF == ord('q'):
-            break
+        #if cv2.waitKey(10) & 0xFF == ord('q'):
+            #break
 
     cap.release()
     cv2.destroyAllWindows()
