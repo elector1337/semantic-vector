@@ -4,16 +4,19 @@ from dataclasses import dataclass
 import pandas as pd
 from pathlib import Path
 from constants import TRACKS_DIR, DATASET_INPUT_WINDOW, DATASET_OUTPUT_WINDOW, DATASET_FEATURES
-
+import logging
+logger = logging.getLogger(__name__)
 
 tracks_dir = TRACKS_DIR
+
+
 tracks_dir.mkdir(exist_ok=True)
 
 @dataclass
 class TrackPoint:
     timestamp: float
     x: float
-    z: float
+    y: float
     marker_id: int
     object_class: ObjectClass
     
@@ -30,9 +33,10 @@ class PointsStorage:
             "frame": detection.frame,
             "timestamp": detection.timestamp,
             "marker_id": detection.marker_id,
+            "track_id": 0,
             "object_class": detection.object_class.name,
             "x": detection.position[0],
-            "z": detection.position[1],
+            "y": detection.position[1],
         })
 
     @property
@@ -40,10 +44,10 @@ class PointsStorage:
         return pd.DataFrame(self.rows)
 
     def save(self):
-        tracks_dir = Path("tracks")
+        tracks_dir = Path("tracks/row")
         tracks_dir.mkdir(exist_ok=True)
         track_number = len(list(tracks_dir.glob("track*.parquet")))
-        filename = tracks_dir / f"track{track_number}.parquet"
+        filename = tracks_dir / f"track{track_number:03}.parquet"
         self.df.to_parquet(filename, index=False)
 
     def save_json(self, filename="tracks.json"):
@@ -68,7 +72,11 @@ class DatasetGenerator:
         dataframe = dataframe.sort_values(
             ["marker_id", "frame"]
         )
-        for marker_id, track in dataframe.groupby("marker_id"):
+        group_columns = ["marker_id"]
+        if "track_id" in dataframe.columns:
+            group_columns.append("track_id")
+
+        for _, track in dataframe.groupby(group_columns):
             points = track[self.features].to_numpy(dtype=np.float32)
             total = len(points)
             if total < self.input_window + self.output_window:
@@ -103,3 +111,4 @@ class DatasetGenerator:
             X=X,
             Y=Y
         )
+        logger.debug(f"{filename} saved")
