@@ -3,9 +3,10 @@ import numpy as np
 from dataclasses import dataclass
 import pandas as pd
 from pathlib import Path
+from constants import TRACKS_DIR, DATASET_INPUT_WINDOW, DATASET_OUTPUT_WINDOW, DATASET_FEATURES
 
 
-tracks_dir = Path("tracks")
+tracks_dir = TRACKS_DIR
 tracks_dir.mkdir(exist_ok=True)
 
 @dataclass
@@ -51,9 +52,9 @@ class PointsStorage:
 class DatasetGenerator:
     def __init__(
         self,
-        input_window=20,
-        output_window=10,
-        features=("x", "z"),
+        input_window=DATASET_INPUT_WINDOW,
+        output_window=DATASET_OUTPUT_WINDOW,
+        features=DATASET_FEATURES,
     ):
 
         self.input_window = input_window

@@ -1,11 +1,38 @@
 import cv2
 import numpy as np
+from constants import (
+    BILATERAL_D,
+    BILATERAL_SIGMA_COLOR,
+    BILATERAL_SIGMA_SPACE,
+    CLAHE_CLIP_LIMIT,
+    CLAHE_TILE_GRID_SIZE,
+    DEFAULT_CAMERA_HEIGHT,
+    DEFAULT_CAMERA_WIDTH,
+    ER_INFO,
+    LOWER_RED1,
+    LOWER_RED2,
+    MIN_CONTOUR_AREA,
+    MORPH_KERNEL,
+    RED_CONTOUR_AREA_THRESHOLD,
+    RED_MASK_LOWER1,
+    RED_MASK_LOWER2,
+    RED_MASK_UPPER1,
+    RED_MASK_UPPER2,
+    ROBOT_VIDEO_STREAM_URL,
+    ROI_HEIGHT_RATIO,
+    S_HSV_ALPHA,
+    S_HSV_BETA,
+    UPPER_RED1,
+    UPPER_RED2,
+    V_HSV_ALPHA,
+    V_HSV_BETA,
+)
 
 
 # класс предобработки
 class CameraPreprocessor:
 
-    def __init__(self, camera_index=0, width=640, height=480):
+    def __init__(self, camera_index=0, width=DEFAULT_CAMERA_WIDTH, height=DEFAULT_CAMERA_HEIGHT):
         self.cap = cv2.VideoCapture(camera_index)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
@@ -13,7 +40,7 @@ class CameraPreprocessor:
         if not self.cap.isOpened():
             raise Exception("Камера не найдена!")
 
-        self.clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        self.clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP_LIMIT, tileGridSize=CLAHE_TILE_GRID_SIZE)
 
     # функция как раз обрабат изображение, яркость + насыщенность подкрутил,
     # также еще с тенями тут полезные фещи накиданы в общем.
@@ -22,7 +49,7 @@ class CameraPreprocessor:
         if not ret:
             return None, None
 
-        filtered = cv2.bilateralFilter(frame, d=5, sigmaColor=5, sigmaSpace=5)
+        filtered = cv2.bilateralFilter(frame, d=BILATERAL_D, sigmaColor=BILATERAL_SIGMA_COLOR, sigmaSpace=BILATERAL_SIGMA_SPACE)
 
         lab = cv2.cvtColor(filtered, cv2.COLOR_BGR2LAB)
         l, a, b = cv2.split(lab)
@@ -35,8 +62,8 @@ class CameraPreprocessor:
         hsv = cv2.cvtColor(balanced_bgr, cv2.COLOR_BGR2HSV)
         h, s, v = cv2.split(hsv)
 
-        s_enhanced = cv2.convertScaleAbs(s, alpha=0.95, beta=-3)
-        v_enhanced = cv2.convertScaleAbs(v, alpha=1.1, beta=0)
+        s_enhanced = cv2.convertScaleAbs(s, alpha=S_HSV_ALPHA, beta=S_HSV_BETA)
+        v_enhanced = cv2.convertScaleAbs(v, alpha=V_HSV_ALPHA, beta=V_HSV_BETA)
 
         final_hsv = cv2.merge((h, s_enhanced, v_enhanced))
 
@@ -48,7 +75,43 @@ class CameraPreprocessor:
         self.cap.release()
 
 
-cap = CameraPreprocessor("http://10.136.128.14:5000/video_feed")
+def get_line_position(frame, center_x):
+    height, width = frame.shape[:2]
+
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+    mask1 = cv2.inRange(hsv, LOWER_RED1, UPPER_RED1)
+    mask2 = cv2.inRange(hsv, LOWER_RED2, UPPER_RED2)
+    mask = cv2.bitwise_or(mask1, mask2)
+
+    kernel = np.ones((3, 3), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+
+    roi_y_start = int(height * (1 - ROI_HEIGHT_RATIO))
+    roi = mask[roi_y_start:height, :]
+
+    contours, _ = cv2.findContours(roi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if not contours:
+        return False, 0, 0, mask, roi_y_start
+
+    c = max(contours, key=cv2.contourArea)
+
+    if cv2.contourArea(c) < MIN_CONTOUR_AREA:
+        return False, 0, 0, mask, roi_y_start
+
+    M = cv2.moments(c)
+    if M["m00"] == 0:
+        return False, 0, 0, mask, roi_y_start
+
+    cx = int(M["m10"] / M["m00"])
+    error = center_x - cx
+
+    return True, cx, error, mask, roi_y_start
+
+
+cap = CameraPreprocessor(ROBOT_VIDEO_STREAM_URL)
 if __name__ == "__main__":
     while True:
         original_frame, frame = cap.get_processed_hsv()
@@ -59,21 +122,15 @@ if __name__ == "__main__":
         #  переводим из BGR в HSV
         hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
 
-        lower_red1 = np.array([0, 120, 100])
-        upper_red1 = np.array([5, 255, 255])
-
-        lower_red2 = np.array([175, 120, 100])
-        upper_red2 = np.array([180, 255, 255])
         # две маски для красного цвета
-        mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
-        mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
+        mask1 = cv2.inRange(hsv, RED_MASK_LOWER1, RED_MASK_UPPER1)
+        mask2 = cv2.inRange(hsv, RED_MASK_LOWER2, RED_MASK_UPPER2)
 
         mask = cv2.bitwise_or(mask1, mask2)
 
         # 5. убираем белые точки внутри маски и черные снаружи
-        kernel = np.ones((5, 5), np.uint8)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, MORPH_KERNEL)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, MORPH_KERNEL)
 
         red_part = cv2.bitwise_and(frame, frame, mask=mask)
 
@@ -99,7 +156,7 @@ if __name__ == "__main__":
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for cnt in contours:
             # фильтр на малые объекты
-            if cv2.contourArea(cnt) > 500:
+            if cv2.contourArea(cnt) > RED_CONTOUR_AREA_THRESHOLD:
                 x, y, w, h = cv2.boundingRect(cnt)
                 cv2.rectangle(result, (x, y), (x + w, y + h), (0, 255, 0), 2)
                 cv2.putText(result, "Red Object", (x, y - 10),

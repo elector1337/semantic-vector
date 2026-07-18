@@ -3,16 +3,9 @@ import numpy as np
 import time
 from history import HistoryManager, ObjectClass, ObjectDetection
 from generator import DatasetGenerator, PointsStorage
+from constants import ARUCO_SIZE, CAMERA_MATRIX, DIST_COEFFS, ROBOT_ID
 
-IP = "192.168.2.2"
-ARUCO_SIZE = 10  # в см
-
-DIST_COEFFS = np.array([[0.76721061, -7.07075198, -0.028711, -0.07152724, 25.9788756]],
-                       dtype=np.float32)  # коэффициенты дисторсии камеры
-
-CAMERA_MATRIX = np.array([[819.95272854, 0., 320.0],
-                          [0., 796.39696541, 240.0],
-                          [0., 0., 1.]], dtype=np.float32)  # матрица камеры
+IP = ROBOT_ID
 class ArucoDetector:
     def __init__(self, ip):
         # запускаем детектор ArUCo

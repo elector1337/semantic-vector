@@ -2,6 +2,8 @@ from collections import deque
 import numpy as np
 from dataclasses import dataclass
 from enum import Enum
+from constants import HISTORY_LENGTH
+
 class ObjectClass(Enum):
     STATIC = 0
     LEFT_RIGHT = 1
@@ -21,7 +23,7 @@ class Observation:
     timestamp: float
 
 class HistoryManager:
-    def __init__(self, history_length=30):
+    def __init__(self, history_length=HISTORY_LENGTH):
         self.history_length = history_length
         self.histories = {}
 

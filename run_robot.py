@@ -5,22 +5,30 @@ import requests
 import threading
 import torch
 
-from filter import CameraPreprocessor
-from reading_red_color import get_line_position
+from filter import CameraPreprocessor, get_line_position
 from algo import get_wheel_speeds
 from pid import PIDController
+from constants import (
+    COMMAND_SEND_INTERVAL,
+    DIST,
+    MTX,
+    MAX_MOTOR_SPEED,
+    ROBOT_URL,
+    ROBOT_CONTROL_KD,
+    ROBOT_CONTROL_KI,
+    ROBOT_CONTROL_KP,
+    USE_RL_AGENT,
+)
 
 # ============ НАСТРОЙКИ СЕТИ И РОБОТА ============
-ROBOT_URL = "http://10.136.128.14:5000"
-MAX_MOTOR_SPEED = 200
-USE_RL_AGENT = False  # Переключатель: False = работает PID, True = работает Нейросеть
+USE_RL_AGENT = USE_RL_AGENT  # Переключатель: False = работает PID, True = работает Нейросеть
 
 # Ограничение частоты отправки команд на сервер (0.1 сек = 10 FPS)
-COMMAND_SEND_INTERVAL = 0.1
+COMMAND_SEND_INTERVAL = COMMAND_SEND_INTERVAL
 
 # === МАТРИЦЫ КАЛИБРОВКИ ===
-MTX = None
-DIST = None
+MTX = MTX
+DIST = DIST
 
 # === ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ДЛЯ ПОТОКА УПРАВЛЕНИЯ ===
 speed_lock = threading.Lock()
@@ -73,7 +81,7 @@ def main():
 
     # === ИНИЦИАЛИЗАЦИЯ УПРАВЛЕНИЯ ===
     print("Инициализация ПИД-регулятора...")
-    pid_controller = PIDController(Kp=1.0, Ki=0.02, Kd=0.5)
+    pid_controller = PIDController(Kp=ROBOT_CONTROL_KP, Ki=ROBOT_CONTROL_KI, Kd=ROBOT_CONTROL_KD)
     pid_controller.reset()
 
     newcameramtx = None
