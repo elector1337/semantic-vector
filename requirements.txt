@@ -2,5 +2,6 @@
 
 matplotlib==3.11.0
 numpy==2.2.1
-opencv-python==4.13.0.92
+opencv-contrib-python==4.13.0.92
 pandas==2.3.3
+scipy==1.14.1
