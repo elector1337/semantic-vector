@@ -302,55 +302,138 @@ def draw_path(frame: np.ndarray, points: np.ndarray, spline: Optional[Tuple[obje
     return output
 
 
-def detect_aruco(frame: np.ndarray, intrinsics: Optional[Tuple[np.ndarray, np.ndarray]] = None) -> np.ndarray:
-    """Detect ArUco markers, draw their boxes, ids, and axes."""
+def enhance_aruco_frame(frame: np.ndarray) -> np.ndarray:
+    """Prepare a frame for more stable ArUco detection under uneven light."""
     if frame is None:
         return None
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame.copy()
+    clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+    gray = clahe.apply(gray)
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    return gray
+
+
+def create_aruco_detector():
+    """Create one tuned ArUco detector shared by viewer and dataset capture."""
+    try:
+        aruco_module = cv2.aruco
+    except AttributeError:  # pragma: no cover - fallback for some builds
+        return None
+
+    dictionary = aruco_module.getPredefinedDictionary(aruco_module.DICT_5X5_100)
+    parameters = aruco_module.DetectorParameters_create() if hasattr(aruco_module, "DetectorParameters_create") else aruco_module.DetectorParameters()
+    parameters.cornerRefinementMethod = aruco_module.CORNER_REFINE_SUBPIX
+    parameters.adaptiveThreshWinSizeMin = 3
+    parameters.adaptiveThreshWinSizeMax = 53
+    parameters.adaptiveThreshWinSizeStep = 4
+    parameters.minMarkerPerimeterRate = 0.015
+    parameters.maxMarkerPerimeterRate = 4.0
+    parameters.minCornerDistanceRate = 0.03
+    parameters.minDistanceToBorder = 2
+    parameters.polygonalApproxAccuracyRate = 0.035
+    parameters.errorCorrectionRate = 0.8
+
+    if hasattr(aruco_module, "ArucoDetector"):
+        return aruco_module.ArucoDetector(dictionary, parameters)
+    return dictionary, parameters
+
+
+def detect_aruco_markers(
+    frame: np.ndarray,
+    intrinsics: Optional[Tuple[np.ndarray, np.ndarray]] = None,
+    marker_size: float = 0.05,
+    detector=None,
+) -> Tuple[list[dict], np.ndarray]:
+    """Detect ArUco markers and safely estimate pose when intrinsics are available."""
+    output = frame.copy()
+    gray = enhance_aruco_frame(output)
+    detector = detector or create_aruco_detector()
+
+    if detector is None:
+        cv2.putText(output, "cv2.aruco unavailable", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+        return [], output
+
+    if hasattr(detector, "detectMarkers"):
+        corners, ids, _ = detector.detectMarkers(gray)
+    else:
+        dictionary, parameters = detector
+        corners, ids, _ = cv2.aruco.detectMarkers(gray, dictionary, parameters=parameters)
+
+    detections = []
+    if ids is None:
+        cv2.putText(output, "No markers detected", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+        return detections, output
 
     matrix = None
     distortion = None
     if intrinsics is not None:
         matrix, distortion = intrinsics
 
-    output = frame.copy()
-    gray = cv2.cvtColor(output, cv2.COLOR_BGR2GRAY)
+    half = float(marker_size) / 2.0
+    object_points = np.array(
+        [
+            [-half, half, 0.0],
+            [half, half, 0.0],
+            [half, -half, 0.0],
+            [-half, -half, 0.0],
+        ],
+        dtype=np.float32,
+    )
 
-    try:
-        aruco_module = cv2.aruco
-    except AttributeError:  # pragma: no cover - fallback for some builds
-        aruco_module = None
+    for idx, raw_corners in enumerate(corners):
+        marker_id = int(ids[idx][0])
+        image_points = np.asarray(raw_corners, dtype=np.float32).reshape(-1, 2)
+        if image_points.shape != (4, 2) or not np.isfinite(image_points).all():
+            continue
 
-    if aruco_module is None:
-        cv2.putText(output, "cv2.aruco unavailable", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-        return output
+        image_points_i = np.rint(image_points).astype(np.int32)
+        cv2.polylines(output, [image_points_i], True, (0, 255, 0), 2)
+        cv2.putText(output, str(marker_id), tuple(image_points_i[0] + [0, -10]), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-    dictionary = aruco_module.getPredefinedDictionary(aruco_module.DICT_5X5_100)
-    parameters = aruco_module.DetectorParameters_create() if hasattr(aruco_module, "DetectorParameters_create") else aruco_module.DetectorParameters()
+        detection = {
+            "id": marker_id,
+            "corners": image_points,
+            "center": image_points.mean(axis=0),
+            "rvec": None,
+            "tvec": None,
+        }
 
-    if hasattr(aruco_module, "ArucoDetector"):
-        detector = aruco_module.ArucoDetector(dictionary, parameters)
-        corners, ids, _ = detector.detectMarkers(gray)
-    else:
-        corners, ids, _ = aruco_module.detectMarkers(gray, dictionary, parameters=parameters)
+        if matrix is not None and distortion is not None:
+            try:
+                success, rvec, tvec = cv2.solvePnP(
+                    object_points,
+                    image_points,
+                    matrix,
+                    distortion,
+                    flags=cv2.SOLVEPNP_IPPE_SQUARE,
+                )
+            except cv2.error:
+                success, rvec, tvec = False, None, None
 
-    if ids is not None:
-        for idx, marker_corners in enumerate(corners):
-            marker_id = int(ids[idx][0])
-            marker_corners = marker_corners.reshape(-1, 2).astype(np.int32)
-            cv2.polylines(output, [marker_corners], True, (0, 255, 0), 2)
-            cv2.putText(output, str(marker_id), (marker_corners[0][0], marker_corners[0][1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            if success:
+                detection["rvec"] = rvec
+                detection["tvec"] = tvec
+                cv2.drawFrameAxes(output, matrix, distortion, rvec, tvec, marker_size * 0.5)
+                label = f"ID:{marker_id} X:{float(tvec[0][0]):.2f} Z:{float(tvec[2][0]):.2f}"
+            else:
+                label = f"ID:{marker_id} pose failed"
+        else:
+            label = f"ID:{marker_id}"
 
-            if matrix is not None and distortion is not None:
-                object_points = np.array([
-                    [-0.5, 0.5, 0.0],
-                    [0.5, 0.5, 0.0],
-                    [0.5, -0.5, 0.0],
-                    [-0.5, -0.5, 0.0],
-                ], dtype=np.float32)
-                success, rvec, tvec = cv2.solvePnP(object_points, marker_corners.reshape(4, 1, 2), matrix, distortion)
-                if success:
-                    cv2.drawFrameAxes(output, matrix, distortion, rvec, tvec, 0.05)
-    else:
-        cv2.putText(output, "No markers detected", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+        center_i = tuple(np.rint(detection["center"]).astype(int))
+        cv2.circle(output, center_i, 5, (0, 0, 255), -1)
+        cv2.putText(output, label, (center_i[0] + 10, center_i[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
+        detections.append(detection)
+
+    if not detections:
+        cv2.putText(output, "No valid markers", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+    return detections, output
+
+
+def detect_aruco(frame: np.ndarray, intrinsics: Optional[Tuple[np.ndarray, np.ndarray]] = None) -> np.ndarray:
+    """Detect ArUco markers, draw their boxes, ids, and axes."""
+    _, output = detect_aruco_markers(frame, intrinsics)
 
     return output
